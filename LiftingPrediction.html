@@ -1718,8 +1718,8 @@ trainDat1 &lt;- cbind(training2[, avgFeats], classe=training2$classe)
 trainDat1 &lt;- trainDat1[ complete.cases(trainDat1),]
 modRF &lt;- train(classe~., data=trainDat1, method=&quot;rf&quot;)</code></pre>
 </div>
-<div id="average-bsed-model-prediction-on-moment-to-moment-values" class="section level2">
-<h2>Average-Bsed Model Prediction on Moment-to-Moment Values</h2>
+<div id="average-based-model-prediction-on-moment-to-moment-values" class="section level2">
+<h2>Average-Based Model Prediction on Moment-to-Moment Values</h2>
 <p>So, now we see how this model performs by pretending the moment-to-moment values of roll, pitch, and yaw in the training set are the averages for an entire data run, and finding the accuracy of this approach as a form of cross validation of our approach. In a way the model is based on this data, so we expect it to work somewhat well.</p>
 <pre class="r"><code>crossDat1 &lt;- data.frame(
       avg_roll_belt = training2$roll_belt, avg_pitch_belt = training2$pitch_belt, avg_yaw_belt = training2$yaw_belt,
@@ -1848,7 +1848,7 @@ conf5$table</code></pre>
 <h1>Results</h1>
 <div id="summary-of-model-creation" class="section level2">
 <h2>Summary of Model Creation</h2>
-<p>We have shown that for a collection of short-run time series of human activity recognition data, random forest models built and predicting on angular movement of gyroscope data classify with 92% accuracy on validation data, but predicting off averages of the same data only results in a 22% decrease in accuracy, resulting in an accuracy of 72%, which is an interesting and potentially useful result in its own right.</p>
+<p>We have shown that for a collection of short-run time series of human activity recognition data, random forest models built and predicting on angular movement of gyroscope data classify with 92% accuracy on validation data, but predicting off averages of the same data only results in a 17% decrease in accuracy, about 75%, which is an interesting and potentially useful result in its own right.</p>
 <p>Neither method was very good at predicting movement patterns of new validation subjects. Therefore for the purposes of testing our explored models, we will be using the full time-series model, modelRF2, to run on the testing set, though plenty of fine tuning, excluding different subjects or variables for instance, is left to be done on these models.</p>
 </div>
 <div id="testing-of-models" class="section level2">

@@ -128,7 +128,7 @@ trainDat1 <- trainDat1[ complete.cases(trainDat1),]
 modRF <- train(classe~., data=trainDat1, method="rf")
 ```
 
-## Average-Bsed Model Prediction on Moment-to-Moment Values
+## Average-Based Model Prediction on Moment-to-Moment Values
 
 So, now we see how this model performs by pretending the moment-to-moment values of roll, pitch, and yaw in the training set are the averages for an entire data run, and finding the accuracy of this approach as a form of cross validation of our approach.  In a way the model is based on this data, so we expect it to work somewhat well.
 
@@ -240,7 +240,7 @@ This model performs better than chance, but still not usefully so.  It suffers f
 
 ## Summary of Model Creation
 
-We have shown that for a collection of short-run time series of human activity recognition data, random forest models built and predicting on angular movement of gyroscope data classify with 92% accuracy on validation data, but predicting off averages of the same data only results in a 22% decrease in accuracy, resulting in an accuracy of 72%, which is an interesting and potentially useful result in its own right.
+We have shown that for a collection of short-run time series of human activity recognition data, random forest models built and predicting on angular movement of gyroscope data classify with 92% accuracy on validation data, but predicting off averages of the same data only results in a 17% decrease in accuracy, about 75%, which is an interesting and potentially useful result in its own right.
 
 Neither method was very good at predicting movement patterns of new validation subjects.  Therefore for the purposes of testing our explored models, we will be using the full time-series model, modelRF2, to run on the testing set, though plenty of fine tuning, excluding different subjects or variables for instance, is left to be done on these models.
 
