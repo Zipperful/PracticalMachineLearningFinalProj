@@ -1,0 +1,281 @@
+---
+title: Loss of Predictive Power in Time Series Modelling Using Average Values of Features
+  in Human Activity Data
+author: "Tim Keele"
+date: "4/29/2020"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(rattle)
+
+```
+
+# Synopsis
+
+In this analysis, we are going to look at a dataset measuring gyroscope movement in different parts of subjects bodies while weightlifting with and without proper form.  We look to see if the average values of some of these movement measures serve as good predictors of the quality of other the exercises on a non-averaged, moment-to-moment basis, using random forests.  We then compare this to predictions looking at the entire time series to see how much predictive power we lost by considering only the averages.  
+
+We will be looking at the average roll, pitch, and yaw of the subjects' arms, forearms, dumbbells, and waists during these exercises.  It is a project requirement that our models be able to predict on any  2.5 second snapshot of a workout to judge its quality, so our average-based model treats each snapshot as an average of an entire exercise.  The training exercises have been sorted in to five types, "A" being used to label a properly executed exercise, and "B" through "E" to label exercises done improperly in specific ways; it is these labels we will try to predict.
+
+
+---------------------------------------------------------------
+
+# Model Building
+
+## Motivation
+
+We have chosen to build a model based on the average values of the pitch, yaw, and roll of various body parts during an exercise, rather than the entire time dependent portion of this gyroscopic data of human activity recognition data, to explore how requisite moment-to-moment analysis is, and how well we can predict off a 'rough' impression of our data.  The given dataset has over 19000 readings in it, which constitute only 400 or so exercises total.  Building a model off of the entire time series takes tens of times longer, though we build this model too to compare them.  For applications on small wearable devices where RAM is a serious concern, we may want to model and predict based off of less data, and this will allow us investigate the degree of the loss of accuracy in these approaches.
+
+
+## Feature Selection
+
+We have decided to build a model on the averages of roll, pitch and yaw of gyroscopes strapped to a subject's waist, forearm, dumbbell, and bicep.  The dataset is a collection of short time series, that span across across one 'rep' of an exercise per what the dataset calls a "window".  The averages of these values are already calculated and stored in the final row of the time series, with NA values in the feature during the rest of the length of the window.
+
+We have chosen the roll, pitch, and yaw values of the sensors in particular because the averages were precalculated in the training set, and for reasons of completeness, and reproduceability.  Both the averages, and the time series versions of these values contain no NA, few missing, and no DIV/0 values as much of the rest of set does.  This is important as we do not have much access to documentation on the more complex features, and interpolation would be difficult.  Furthermore they are universal types of measurements across gyroscopic hardware- others using different gyroscopes to repeat the experiment are certain to be able to replicate some form of these values regardless of hardware.
+
+## Data Partitioning
+
+We will be building two seperate validation sets in this analysis, before executing it on the training set, for a couple of reasons.  Firstly, our testing set is very small- 20 time slices of exercises.  We are not given entire events to predict on or judge, only in-the-moment data we would like to predict on.  We wil want to see how this model behaves in more diverse circumstances.
+
+Secondly, we set aside an entire subject's data to validate because we are interested in how robust this model is when given new subjects, who may perform exercises in noteably different ways.  There is no guarantee that the test data we have been given has been performed by one of our 6 subjects, so we set aside an entire subject to validate upon, (roughly 1/6th of the data) as well as a subset of 100 randomly chosen time series of exercises (a further sixth of the remaining data) to see if this classification approach makes any exercise-type specific errors, such as conflating "B" type errors, half-raising a dumbbell, with "C" type errors, half lowering a dumbbell, to look for particular weaknesses in this approach.  Our model will be weaker for including fewer subjects, but at least we will have an idea of how weak our approach is when new subject data is introduced. 
+
+```{r datapar1}
+pretraining <- read.csv("pml-training.csv", na.strings = "NA", stringsAsFactors = TRUE)
+testing <- read.csv("pml-testing.csv", na.strings = "NA", stringsAsFactors = TRUE)
+
+set.seed(1991)
+randSubject<- sample(x=levels(pretraining$user_name), size=1)
+validateSubject <- pretraining[ (pretraining$user_name == randSubject), ]
+training <- pretraining[ !(pretraining$user_name == randSubject), ]
+
+
+set.seed(99)
+valselect <- sample(x=levels(as.factor(training$num_window)), size=100, replace = FALSE)
+validating <- training[ as.character(training[,"num_window"]) %in% valselect, ]
+
+training2 <- training[ !(training$num_window %in% valselect), ]
+```
+
+We will build our approach on the training2 data set, then validate it against randomly excluded exercises from the same 5 subjects.  Then, we will test our overall approach against data from the randomly excluded subject in the validateSubject.
+
+The features we have selected to train on appear as follows in our datasets.  We will use them to predict upon the similarly named features minus the "avg_" part.
+
+```{r datapar2, echo=FALSE}
+paste(names(training[ grepl("avg", names(training)) ] ),  collapse="  ")
+```
+
+## Feature Analysis
+
+Here we look at the difference between a couple graphs to show how differences between our features might manifest.  
+
+Firstly, some justification in our approach.  Shown here is the pitch reading of a dumbbell gyroscope for two different subjects (colored in reds and blues), performing the exercise correctly (class "A").  As we can see, there is a large amount of variablility in how the sensors read this activity between the two subjects.   The subject in blue executes the exercise with very little variability in dumbbell pitch, while the subject in red executes the exercise with much wider variance in his dumbbell pitch.  However, the averages of these values are highly similar between different exercise sets, so these measurements should have some predictive power for an individual.  
+
+```{r featana1, echo=FALSE}
+plot(0, type='n', xlim=c(0,25), ylim=c(-60,20), ylab="Dumbbell Pitch for Two Subjects\nAcross Two Correctly Executed Exercises", xlab="Timestep")
+lines(1:length(training$pitch_dumbbell[ training$num_window == 200]), training$pitch_dumbbell[ training$num_window == 200], col="blue1", lwd=4)
+abline(h= mean(training$pitch_dumbbell[ training$num_window == 200]), col = "blue1", lty=2)
+lines(1:length(training$pitch_dumbbell[ training$num_window == 210]), training$pitch_dumbbell[ training$num_window == 210], col="dodgerblue2", lwd=4)
+abline(h= mean(training$pitch_dumbbell[ training$num_window == 210]), col = "dodgerblue2", lty=2)
+lines(1:length(training$pitch_dumbbell[ training$num_window == 670]), training$pitch_dumbbell[ training$num_window == 670], col="red", lwd=4)
+abline(h= mean(training$pitch_dumbbell[ training$num_window == 670]), col = "red", lty=2)
+lines(1:length(training$pitch_dumbbell[ training$num_window == 680]), training$pitch_dumbbell[ training$num_window == 680], col="violetred", lwd=4)
+abline(h= mean(training$pitch_dumbbell[ training$num_window == 680]), col = "violetred", lty=2)
+
+```
+
+The averages above are also somewhat similar between the two subjects, can we distinguish activity type across subjects as well?
+
+A histogram of the measure of dumbell pitches for several different exercise types shows that meaningful differences can be observed for the averages of this measure across each exercise type.  These means have been highlighted in red.  While only exercise types "B" and "D" exhibit similar means for the measure of the data, the hope is that there will be noticeable differences in the averages of this, and the other measures in our model to retain some predictive power regardless of subject or exercise type.
+
+```{r featana2, echo=FALSE}
+par(mfrow = c(2,2), mar=c(6,4,0.5,0.5), oma=c(1,1,3,1))
+hist(training$pitch_dumbbell[ training$classe == "A"], xlab="Type A Exercises", main="")
+abline(v=mean(training$pitch_dumbbell[ training$classe == "A"]), col="red")
+hist(training$pitch_dumbbell[ training$classe == "B"], xlab="Type B Exercises", main="")
+abline(v=mean(training$pitch_dumbbell[ training$classe == "B"]), col="red")
+hist(training$pitch_dumbbell[ training$classe == "C"], xlab="Type C Exercises", main="")
+abline(v=mean(training$pitch_dumbbell[ training$classe == "C"]), col="red")
+hist(training$pitch_dumbbell[ training$classe == "D"], xlab="Type D Exercises", main="")
+abline(v=mean(training$pitch_dumbbell[ training$classe == "D"]), col="red")
+mtext("Histograms of Dumbbell Pitch in Training Data", side=3, cex=1.2, outer = TRUE)
+```
+
+## Model Selection
+
+We have chosen the random forest method to analyze our data as it has no need of complex cross validation, or rather cross validates automatically, and because of its general accuracy.  This way we can spend our energy cross validating our general approach with the same model executed on a validation set of time series, rather than average-across-time-series values, and then validate our approach against the addition of a new subject.  
+
+
+---------------------------------------------------------------
+
+# Model Implementation and Analysis
+
+## Training a Model from Average Values
+
+Here, we create a version of the dataset that only contains the average measures of exercises, and use caret to build a random forest model on it.
+
+```{r model1}
+set.seed(219912)
+avgFeats <- names(training2[ grepl("avg", names(training2)) ] )
+trainDat1 <- cbind(training2[, avgFeats], classe=training2$classe)
+trainDat1 <- trainDat1[ complete.cases(trainDat1),]
+modRF <- train(classe~., data=trainDat1, method="rf")
+```
+
+## Average-Bsed Model Prediction on Moment-to-Moment Values
+
+So, now we see how this model performs by pretending the moment-to-moment values of roll, pitch, and yaw in the training set are the averages for an entire data run, and finding the accuracy of this approach as a form of cross validation of our approach.  In a way the model is based on this data, so we expect it to work somewhat well.
+
+```{r model2}
+crossDat1 <- data.frame(
+      avg_roll_belt = training2$roll_belt, avg_pitch_belt = training2$pitch_belt, avg_yaw_belt = training2$yaw_belt,
+      avg_roll_arm = training2$roll_arm, avg_pitch_arm = training2$pitch_arm, avg_yaw_arm = training2$yaw_arm,
+      avg_roll_dumbbell = training2$roll_dumbbell, avg_pitch_dumbbell = training2$pitch_dumbbell, avg_yaw_dumbbell = training2$yaw_dumbbell,
+      avg_roll_forearm = training2$roll_forearm, avg_pitch_forearm = training2$pitch_forearm, avg_yaw_forearm = training2$yaw_forearm,
+      classe = training2$classe
+      )
+
+results1 <- predict(modRF$finalModel, newdata = crossDat1)
+conf1 <- confusionMatrix(results1, reference = crossDat1$classe)
+conf1$table
+conf1$overall[1]
+```
+
+The confusion matrix of these results shows us that a model built on the averages of the data has decent predictive power on the moment-to-moment readings in a dataset, with around 79% accuracy.  Nothing to write home about, but we expect suboptimal performance with this approach.
+
+## Average-Based Model Validation
+
+Now, we run our model on the validation set of snapshots taken from 100 full exercises from our 5 trained-upon subjects.
+
+```{r valid1}
+valDat1 <- data.frame(
+      avg_roll_belt = validating$roll_belt, avg_pitch_belt = validating$pitch_belt, avg_yaw_belt = validating$yaw_belt,
+      avg_roll_arm = validating$roll_arm, avg_pitch_arm = validating$pitch_arm, avg_yaw_arm = validating$yaw_arm,
+      avg_roll_dumbbell = validating$roll_dumbbell, avg_pitch_dumbbell = validating$pitch_dumbbell, avg_yaw_dumbbell = validating$yaw_dumbbell,
+      avg_roll_forearm = validating$roll_forearm, avg_pitch_forearm = validating$pitch_forearm, avg_yaw_forearm = validating$yaw_forearm,
+      classe = validating$classe
+      )
+
+results2 <- predict(modRF$finalModel, newdata = valDat1)
+conf2<-confusionMatrix(results2, reference = valDat1$classe)
+conf2$table
+conf2$overall[1]
+```
+
+We see that our model is predictably less accurate, about 75% accurate on our validation set, but not unworkably so.  We see that an average based model doesn't lose large amounts of its predictive power when testing upon new data from the same subjects.
+
+## Average Based Model Validated on a New Subject
+
+Now we apply this model to one of the 6 subjects excluded from the training set.
+
+```{r valid2}
+valDat2 <- data.frame(
+      avg_roll_belt = validateSubject$roll_belt, avg_pitch_belt = validateSubject$pitch_belt, avg_yaw_belt = validateSubject$yaw_belt,
+      avg_roll_arm = validateSubject$roll_arm, avg_pitch_arm = validateSubject$pitch_arm, avg_yaw_arm = validateSubject$yaw_arm,
+      avg_roll_dumbbell = validateSubject$roll_dumbbell, avg_pitch_dumbbell = validateSubject$pitch_dumbbell, avg_yaw_dumbbell = validateSubject$yaw_dumbbell,
+      avg_roll_forearm = validateSubject$roll_forearm, avg_pitch_forearm = validateSubject$pitch_forearm, avg_yaw_forearm = validateSubject$yaw_forearm,
+      classe = validateSubject$classe
+      )
+
+results3 <- predict(modRF$finalModel, newdata = valDat2)
+conf3<-confusionMatrix(results3, reference = valDat2$classe)
+conf3$table
+conf3$overall[1]
+```
+We see that this yeilds accuracy scarcely better than chance.  However, we also see that there are patterns to be observed here, the most prominent being that no single exercise snapshot was classified as type "D", indicating that the new subject executes exercises in fashions totally unlike those in our training data.  This is fairly characteristic of the dataset.  Leave-one-out analysis of this model, leaving different subjects out but keeping all other factors the same, show we rarely have any predictive power over new subjects, and that our approch is highly idiosyncratic for a single subject or subject set.  Actively using this model in human recognition would require calibration to the subject just to be remotely useable.
+
+
+---------------------------------------------------------------
+
+# Model Comparison
+
+## Comparison of the Average Based Model to a Time Dependent Model
+
+Now lets see what happens if we calculate a model based off the whole time series, rather than the averages, and how it holds up in validation and new subject testing.
+
+```{r model3}
+set.seed(32199123)
+trainDat2 <- training2[ , names(training2) %in% c("roll_belt", "pitch_belt", "yaw_belt", "roll_arm", "pitch_arm", "yaw_arm", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbell", "roll_forearm", "pitch_forearm", "yaw_forearm", "classe")]
+
+modRF2 <- train(classe~., data=trainDat2, method="rf")
+
+```
+
+This model took fifty times longer to create- but of course should be vastly more accurate.  Running it against our validation set, we see that is the case.
+
+```{r valid3}
+valDat3 <- validating[ , names(validating) %in% c("roll_belt", "pitch_belt", "yaw_belt", "roll_arm", "pitch_arm", "yaw_arm", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbell", "roll_forearm", "pitch_forearm", "yaw_forearm", "classe")]
+
+results4 <- predict(modRF2$finalModel, newdata = valDat3)
+conf4<-confusionMatrix(results4, reference = valDat3$classe)
+conf4$table
+conf4$overall[1]
+```
+
+This shows us that the variables we have selected to predict on are very useful for predicting on the data, with a 92.20% accuracy.  This means there is only a 17.14% decrease in accuracy on a model built with just the averages of these predictors, which requires 50 times less time and data to model.
+
+Finally, let's look at how well this model performs on a new subject.
+
+```{r valid4}
+valDat4 <- validateSubject[ , names(validateSubject) %in% c("roll_belt", "pitch_belt", "yaw_belt", "roll_arm", "pitch_arm", "yaw_arm", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbell", "roll_forearm", "pitch_forearm", "yaw_forearm", "classe")]
+
+results5 <- predict(modRF2$finalModel, newdata = valDat4)
+conf5<-confusionMatrix(results5, reference = valDat4$classe)
+conf5$table
+conf5$overall[1]
+```
+
+This model performs better than chance, but still not usefully so.  It suffers from similar flaws to that of the average based model, in that it does not think any instances of exercise type "D" occurred, and it has little discrimination assigning exercises to category "B".  Our original model's failure to categorize for new subjects is therefore probably not due to it's average-based nature, so much as the idiosyncracies of a subject's movement.
+
+
+---------------------------------------------------------------
+
+# Results
+
+## Summary of Model Creation
+
+We have shown that for a collection of short-run time series of human activity recognition data, random forest models built and predicting on angular movement of gyroscope data classify with 92% accuracy on validation data, but predicting off averages of the same data only results in a 22% decrease in accuracy, resulting in an accuracy of 72%, which is an interesting and potentially useful result in its own right.
+
+Neither method was very good at predicting movement patterns of new validation subjects.  Therefore for the purposes of testing our explored models, we will be using the full time-series model, modelRF2, to run on the testing set, though plenty of fine tuning, excluding different subjects or variables for instance, is left to be done on these models.
+
+## Testing of Models
+
+For this project, we were given test data to output on.  It is a scant selection, 20 snapshots of the training set's time-dependent data.  Output of both models, ran on the given test data follows, though we have submitted that generated by model2.  The models are only 65% in agreement.
+
+
+```{r results1}
+testing2 <- cbind.data.frame(testing, classe = testing$raw_timestamp_part_2)
+testing2$classe <- pretraining$classe[ pretraining$raw_timestamp_part_2 %in% testing2$raw_timestamp_part_2 ]
+answers <- testing2$classe
+
+
+resDat1 <- data.frame(
+      avg_roll_belt = testing2$roll_belt, avg_pitch_belt = testing2$pitch_belt, avg_yaw_belt = testing2$yaw_belt,
+      avg_roll_arm = testing2$roll_arm, avg_pitch_arm = testing2$pitch_arm, avg_yaw_arm = testing2$yaw_arm,
+      avg_roll_dumbbell = testing2$roll_dumbbell, avg_pitch_dumbbell = testing2$pitch_dumbbell, avg_yaw_dumbbell = testing2$yaw_dumbbell,
+      avg_roll_forearm = testing2$roll_forearm, avg_pitch_forearm = testing2$pitch_forearm, avg_yaw_forearm = testing2$yaw_forearm,
+      classe = testing2$classe
+      )
+
+resultsFinal1 <- predict(modRF$finalModel, newdata = resDat1)
+
+
+resDat2 <- testing2[ , names(testing2) %in% c("roll_belt", "pitch_belt", "yaw_belt", "roll_arm", "pitch_arm", "yaw_arm", "roll_dumbbell", "pitch_dumbbell", "yaw_dumbell", "roll_forearm", "pitch_forearm", "yaw_forearm", "classe")]
+
+resultsFinal2 <- predict(modRF2$finalModel, newdata = resDat2)
+
+
+resultsFinal1
+resultsFinal2
+```
+
+## Further Analysis
+
+As I have hit the word limit for this project, I would say for further analysis, I would see if leaving out some subjects to see if this improves the overall predictive power, as there was some evidence one or two subjects data was very different from the others', and I would look at incorporating as many new subjects as possible in general, as our analysis suggests new subjects are hard to predict on, but it is possible the ways in which subject activity may differ are finite, and a model including all of them could perform very well generally.
+
